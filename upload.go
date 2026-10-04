@@ -57,10 +57,11 @@ func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
 // ingest 가 업로드 보안 파이프라인의 핵심이다.
 //
 //  1. 파일명 검증/정규화 + 확장자 허용 목록 (validate.go)
-//  2. 임시 파일로 스트리밍 저장
-//  3. 서버가 만든 랜덤 ID 로 최종 경로 확정 (사용자 입력은 경로에 전혀 쓰이지 않음)
+//  2. 앞 512바이트로 실제 MIME 판별 → 확장자와 일치해야 통과
+//  3. 임시 파일로 스트리밍 저장
+//  4. 서버가 만든 랜덤 ID 로 최종 경로 확정 (사용자 입력은 경로에 전혀 쓰이지 않음)
 func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
-	name, _, herr := validateFilename(rawName)
+	name, ext, herr := validateFilename(rawName)
 	if herr != nil {
 		return nil, herr
 	}
@@ -78,13 +79,29 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
 		}
 	}()
 
-	size, err := io.Copy(tmp, src)
+	head := make([]byte, 512)
+	n, err := io.ReadFull(src, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	head = head[:n]
+	if n == 0 {
+		return nil, newErr(http.StatusBadRequest, "빈 파일은 업로드할 수 없습니다")
+	}
+
+	mimeType, err := checkMIME(ext, head)
+	if err != nil {
+		return nil, newErr(http.StatusUnsupportedMediaType, "%s", err.Error())
+	}
+
+	if _, err := tmp.Write(head); err != nil {
+		return nil, err
+	}
+	rest, err := io.Copy(tmp, src)
 	if err != nil {
 		return nil, err
 	}
-	if size == 0 {
-		return nil, newErr(http.StatusBadRequest, "빈 파일은 업로드할 수 없습니다")
-	}
+	size := int64(n) + rest
 	if err := tmp.Close(); err != nil {
 		return nil, err
 	}
@@ -93,7 +110,7 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Meta{ID: id, Name: name, Size: size, CreatedAt: time.Now().UTC()}
+	m := &Meta{ID: id, Name: name, Size: size, MIME: mimeType, CreatedAt: time.Now().UTC()}
 	if err := s.store.Commit(m, tmpPath); err != nil {
 		return nil, err
 	}
