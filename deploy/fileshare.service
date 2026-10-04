@@ -1,0 +1,39 @@
+# 설치:  sudo cp deploy/fileshare.service /etc/systemd/system/
+#        sudo systemctl daemon-reload && sudo systemctl enable --now fileshare
+# BASE_URL 은 실제 도메인으로 바꾸세요. 앱은 127.0.0.1 에만 열고 앞단(Caddy/nginx)이 HTTPS 를 처리합니다.
+[Unit]
+Description=FileShare (Go file sharing service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fileshare
+Group=fileshare
+ExecStart=/opt/fileshare/fileshare
+Environment=ADDR=127.0.0.1:8080
+Environment=DATA_DIR=/var/lib/fileshare
+Environment=BASE_URL=https://files.example.com
+Environment=TRUST_PROXY=true
+Environment=MAX_UPLOAD_MB=20
+Environment=TTL_HOURS=24
+Restart=on-failure
+RestartSec=2
+
+# 샌드박싱: 이 서비스가 침해되더라도 피해 범위를 줄인다.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/fileshare
+StateDirectory=fileshare
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
