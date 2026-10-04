@@ -1,0 +1,7 @@
+.git
+data
+scripts
+deploy
+*.md
+*.log
+.env
