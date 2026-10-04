@@ -5,6 +5,9 @@ import (
 	"net/http"
 )
 
+// multipart 경계/헤더 등 오버헤드를 감안한 요청 본문 여유분
+const multipartOverhead = 1 << 20
+
 type Server struct {
 	cfg   Config
 	store *Store
