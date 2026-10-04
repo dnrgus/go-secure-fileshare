@@ -1,0 +1,10 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	# 앱의 MAX_UPLOAD_MB 보다 약간 크게: 앞단에서 먼저 거대한 요청을 잘라낸다.
+	request_body {
+		max_size 25MB
+	}
+
+	reverse_proxy app:8080
+}
