@@ -25,9 +25,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	w.Header().Set("Content-Type", m.MIME) // 업로드 때 내용으로 판별해 둔 값 (허용 목록 안의 안전한 타입뿐)
-	w.Header().Set("Content-Disposition", `attachment; filename="`+m.Name+`"`)
+	h := w.Header()
+	h.Set("Content-Type", m.MIME) // 업로드 때 내용으로 판별해 둔 값 (허용 목록 안의 안전한 타입뿐)
+	h.Set("Content-Disposition", contentDisposition(m.Name))
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox") // 어떤 경우에도 스크립트 실행 불가
+	h.Set("Cache-Control", "private, no-store")
+	h.Set("X-Robots-Tag", "noindex, nofollow")
 
-	// ServeContent 가 Range / HEAD / If-Modified-Since 를 처리한다.
+	// ServeContent 가 Range / HEAD / If-Modified-Since 를 처리한다. name="" 이므로 확장자로 타입을 추측하지 않는다.
 	http.ServeContent(w, r, "", m.CreatedAt, f)
 }
