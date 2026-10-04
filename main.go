@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +14,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed web
+var webFS embed.FS
 
 // Config 는 환경변수로 주입되는 서버 설정이다.
 type Config struct {
@@ -64,7 +69,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("저장소 초기화 실패: %v", err)
 	}
-	srv := NewServer(cfg, store)
+
+	web, err := fs.Sub(webFS, "web")
+	if err != nil {
+		log.Fatalf("임베드 파일 로드 실패: %v", err)
+	}
+	srv := NewServer(cfg, store, web)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

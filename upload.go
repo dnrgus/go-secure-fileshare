@@ -13,6 +13,17 @@ import (
 	"time"
 )
 
+type uploadResp struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Size      int64     `json:"size"`
+	MIME      string    `json:"mime"`
+	SHA256    string    `json:"sha256"`
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expires_at"`
+	DeleteKey string    `json:"delete_key"`
+}
+
 func (s *Server) allow(w http.ResponseWriter, r *http.Request) bool {
 	if s.limiter.Allow(clientIP(r, s.cfg.TrustProxy)) {
 		return true
@@ -23,6 +34,7 @@ func (s *Server) allow(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // handleUploadForm: POST /upload (multipart/form-data, 필드명 "file")
+// 웹 UI 와 `curl -F "file=@a.png"` 가 공통으로 사용한다.
 func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 	if !s.allow(w, r) {
 		return
@@ -199,6 +211,13 @@ func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta
 	link := base + "/f/" + m.ID + "/" + url.PathEscape(m.Name)
 	w.Header().Set("Cache-Control", "no-store")
 
+	if wantsJSON(r) {
+		writeJSON(w, http.StatusCreated, uploadResp{
+			ID: m.ID, Name: m.Name, Size: m.Size, MIME: m.MIME, SHA256: m.SHA256,
+			URL: link, ExpiresAt: m.ExpiresAt, DeleteKey: key,
+		})
+		return
+	}
 	// curl 용 평문 응답: 첫 줄이 곧 공유 링크이므로 `| head -n1` 로 스크립트에서 쓰기 쉽다.
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)

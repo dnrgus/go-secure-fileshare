@@ -54,6 +54,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, http.StatusInternalServerError, "서버 내부 오류")
 		return
 	}
+	if wantsJSON(r) {
+		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("deleted\n"))
 }
