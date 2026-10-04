@@ -13,8 +13,20 @@ import (
 	"time"
 )
 
+func (s *Server) allow(w http.ResponseWriter, r *http.Request) bool {
+	if s.limiter.Allow(clientIP(r, s.cfg.TrustProxy)) {
+		return true
+	}
+	w.Header().Set("Retry-After", "30")
+	fail(w, r, http.StatusTooManyRequests, "요청이 너무 많습니다. 잠시 후 다시 시도하세요")
+	return false
+}
+
 // handleUploadForm: POST /upload (multipart/form-data, 필드명 "file")
 func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
+	if !s.allow(w, r) {
+		return
+	}
 	limit := s.cfg.MaxUpload + multipartOverhead
 	if r.ContentLength > limit { // 본문을 읽기 전에 빠르게 거절
 		fail(w, r, http.StatusRequestEntityTooLarge, s.tooLargeMsg())
@@ -55,6 +67,9 @@ func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 
 // handleUploadPut: PUT /upload/{name}  →  curl -T a.png http://host/upload/
 func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
+	if !s.allow(w, r) {
+		return
+	}
 	if r.ContentLength > s.cfg.MaxUpload {
 		fail(w, r, http.StatusRequestEntityTooLarge, s.tooLargeMsg())
 		return
