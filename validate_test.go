@@ -132,3 +132,37 @@ func TestCheckMIME(t *testing.T) {
 		})
 	}
 }
+
+func TestContentDisposition(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+		deny []string
+	}{
+		{"ascii", "report.pdf", []string{`attachment;`, `filename="report.pdf"`, `filename*=UTF-8''report.pdf`}, nil},
+		{"korean", "보고서.pdf", []string{`filename="보고서.pdf"`, `filename*=UTF-8''%EB%B3%B4%EA%B3%A0%EC%84%9C.pdf`}, nil},
+		{"percent sign", "100%.txt", []string{`filename="100_.txt"`, `filename*=UTF-8''100%25.txt`}, nil},
+		{"bidi control", "a\u202eb.txt", []string{`filename="a_b.txt"`}, []string{"\u202e" + "b"}},
+		{"quote and semicolon", `a"b;c.txt`, []string{`filename="a_b_c.txt"`}, []string{`a"b`}},
+		{"space", "my file.txt", []string{`filename*=UTF-8''my%20file.txt`}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := contentDisposition(tc.in)
+			if strings.ContainsAny(got, "\r\n") {
+				t.Fatalf("헤더에 개행이 들어감: %q", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("%q 가 %q 를 포함해야 함", got, w)
+				}
+			}
+			for _, d := range tc.deny {
+				if strings.Contains(got, d) {
+					t.Errorf("%q 가 %q 를 포함하면 안 됨", got, d)
+				}
+			}
+		})
+	}
+}

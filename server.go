@@ -24,8 +24,28 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /f/{id}", s.handleDownload)
 	mux.HandleFunc("GET /f/{id}/{name}", s.handleDownload) // name 은 장식용 (curl -O 가 파일명을 얻도록)
+	mux.HandleFunc("DELETE /f/{id}", s.handleDelete)
 
-	return mux
+	return s.headersMW(mux)
+}
+
+// ---- 미들웨어 ----
+
+const pageCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+	"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+func (s *Server) headersMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", pageCSP) // 다운로드 핸들러는 더 엄격한 값으로 덮어쓴다
+		if r.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---- 응답/요청 헬퍼 ----
