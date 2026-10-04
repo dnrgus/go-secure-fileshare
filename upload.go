@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
-	"strings"
 	"time"
 )
 
@@ -56,12 +54,15 @@ func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
 	s.respondUploaded(w, r, m)
 }
 
-// ingest 는 업로드 본문을 임시 파일로 스트리밍 저장한 뒤 랜덤 ID 로 확정한다.
-// 사용자 입력(파일명)은 경로에 전혀 쓰이지 않는다.
+// ingest 가 업로드 보안 파이프라인의 핵심이다.
+//
+//  1. 파일명 검증/정규화 + 확장자 허용 목록 (validate.go)
+//  2. 임시 파일로 스트리밍 저장
+//  3. 서버가 만든 랜덤 ID 로 최종 경로 확정 (사용자 입력은 경로에 전혀 쓰이지 않음)
 func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
-	name := path.Base(strings.ReplaceAll(rawName, `\`, "/"))
-	if name == "" || name == "." || name == "/" {
-		return nil, errors.New("invalid filename")
+	name, _, herr := validateFilename(rawName)
+	if herr != nil {
+		return nil, herr
 	}
 
 	tmp, err := s.store.CreateTemp()
@@ -73,13 +74,16 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
 	defer func() {
 		_ = tmp.Close()
 		if !committed {
-			_ = os.Remove(tmpPath) // 실패한 업로드는 흔적을 남기지 않는다
+			_ = os.Remove(tmpPath) // 실패/거절된 업로드는 흔적을 남기지 않는다
 		}
 	}()
 
 	size, err := io.Copy(tmp, src)
 	if err != nil {
 		return nil, err
+	}
+	if size == 0 {
+		return nil, newErr(http.StatusBadRequest, "빈 파일은 업로드할 수 없습니다")
 	}
 	if err := tmp.Close(); err != nil {
 		return nil, err
@@ -97,9 +101,15 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
 	return m, nil
 }
 
+// respondErr: httpError 는 그대로 노출하고, 그 외 내부 오류는 로그에만 남기고 일반 메시지로 가린다.
 func (s *Server) respondErr(w http.ResponseWriter, r *http.Request, err error) {
+	var he *httpError
+	if errors.As(err, &he) {
+		fail(w, r, he.Status, he.Msg)
+		return
+	}
 	log.Printf("업로드 처리 오류: %v", err)
-	fail(w, r, http.StatusBadRequest, "업로드에 실패했습니다")
+	fail(w, r, http.StatusInternalServerError, "서버 내부 오류")
 }
 
 func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta) {
