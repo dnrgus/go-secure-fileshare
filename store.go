@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,11 +21,23 @@ var ErrNotFound = errors.New("file not found")
 
 // Meta 는 파일 1개의 메타데이터. <id>.json 으로 저장된다.
 type Meta struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"` // 원본 이름 (표시용, 경로에 쓰이지 않음)
-	Size      int64     `json:"size"`
-	MIME      string    `json:"mime"` // 내용 기반으로 판별한 MIME
-	CreatedAt time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"` // 원본 이름 (표시용, 경로에 쓰이지 않음)
+	Size       int64     `json:"size"`
+	MIME       string    `json:"mime"` // 내용 기반으로 판별한 MIME
+	SHA256     string    `json:"sha256"`
+	CreatedAt  time.Time `json:"created_at"`
+	DeleteHash string    `json:"delete_hash"` // 삭제 키의 SHA-256 (원문은 저장하지 않음)
+}
+
+// CheckDeleteKey 는 상수 시간 비교로 타이밍 공격을 피한다.
+func (m *Meta) CheckDeleteKey(key string) bool {
+	return subtle.ConstantTimeCompare([]byte(hashKey(key)), []byte(m.DeleteHash)) == 1
+}
+
+func hashKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
 func randomHex(nBytes int) (string, error) {
@@ -137,4 +151,20 @@ func (s *Store) Open(id string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+func (s *Store) Delete(id string) error {
+	if !idPattern.MatchString(id) {
+		return ErrNotFound
+	}
+	if _, err := s.readMeta(id); err != nil {
+		return err
+	}
+	s.removeFiles(id)
+	return nil
+}
+
+func (s *Store) removeFiles(id string) {
+	_ = os.Remove(s.dataPath(id))
+	_ = os.Remove(s.metaPath(id))
 }
