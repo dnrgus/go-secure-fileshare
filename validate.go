@@ -31,6 +31,17 @@ var allowedTypes = map[string][]string{
 	".pptx": {"application/zip"},
 }
 
+// dangerousExt: 파일명 중간에 끼어 있으면 이중 확장자 공격(shell.php.png)으로 보고 거부한다.
+var dangerousExt = map[string]bool{
+	"php": true, "phtml": true, "php3": true, "php5": true, "phar": true,
+	"jsp": true, "jspx": true, "asp": true, "aspx": true, "cgi": true,
+	"exe": true, "dll": true, "so": true, "msi": true, "com": true, "scr": true,
+	"bat": true, "cmd": true, "ps1": true, "vbs": true, "hta": true,
+	"sh": true, "bash": true, "py": true, "pl": true, "rb": true,
+	"js": true, "mjs": true, "html": true, "htm": true, "xhtml": true, "svg": true,
+	"jar": true, "war": true,
+}
+
 // httpError 는 클라이언트에게 그대로 보여줘도 되는 오류(상태 코드 + 메시지)다.
 type httpError struct {
 	Status int
@@ -68,8 +79,8 @@ func validateFilename(raw string) (name, ext string, herr *httpError) {
 		return "", "", newErr(http.StatusBadRequest, "파일 이름이 너무 깁니다")
 	}
 	for _, r := range raw {
-		// NUL, 개행 등(헤더 인젝션/잘림 공격 방지)
-		if unicode.IsControl(r) {
+		// NUL, 개행 등(헤더 인젝션/잘림 공격 방지) + 방향 제어 문자(확장자 위장 방지)
+		if unicode.IsControl(r) || isBidiControl(r) {
 			return "", "", newErr(http.StatusBadRequest, "파일 이름에 제어 문자를 쓸 수 없습니다")
 		}
 	}
@@ -99,6 +110,15 @@ func validateFilename(raw string) (name, ext string, herr *httpError) {
 		return "", "", newErr(http.StatusUnsupportedMediaType,
 			"허용되지 않는 확장자입니다: %s (허용: %s)", ext, strings.Join(allowedExtensions(), " "))
 	}
+
+	// 이중 확장자: "shell.php.png" → 이름 첫 조각(shell)을 제외한 중간 조각에 위험 확장자가 있으면 거부.
+	stem := strings.TrimSuffix(name, path.Ext(name))
+	parts := strings.Split(strings.ToLower(stem), ".")
+	for _, p := range parts[1:] {
+		if dangerousExt[p] {
+			return "", "", newErr(http.StatusUnsupportedMediaType, "위험한 이중 확장자가 포함되어 있습니다: .%s", p)
+		}
+	}
 	return name, ext, nil
 }
 
@@ -118,4 +138,11 @@ func checkMIME(ext string, head []byte) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("파일 내용(%s)이 확장자(%s)와 일치하지 않습니다", base, ext)
+}
+
+// isBidiControl: 방향 제어 문자(RLO 등)는 "evil\u202egnp.exe" 처럼 파일명 표시를 뒤집어 확장자를 속이는 데 쓰인다.
+func isBidiControl(r rune) bool {
+	return r == '\u200e' || r == '\u200f' ||
+		(r >= '\u202a' && r <= '\u202e') ||
+		(r >= '\u2066' && r <= '\u2069')
 }
