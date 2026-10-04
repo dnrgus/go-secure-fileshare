@@ -24,6 +24,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /f/{id}", s.handleDownload)
 	mux.HandleFunc("GET /f/{id}/{name}", s.handleDownload) // name 은 장식용 (curl -O 가 파일명을 얻도록)
+	mux.HandleFunc("DELETE /f/{id}", s.handleDelete)
 
 	return s.headersMW(mux)
 }
