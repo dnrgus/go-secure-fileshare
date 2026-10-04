@@ -15,6 +15,13 @@ import (
 
 // handleUploadForm: POST /upload (multipart/form-data, 필드명 "file")
 func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
+	limit := s.cfg.MaxUpload + multipartOverhead
+	if r.ContentLength > limit { // 본문을 읽기 전에 빠르게 거절
+		fail(w, r, http.StatusRequestEntityTooLarge, s.tooLargeMsg())
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit) // 실제 읽은 바이트 수도 강제 제한 (Content-Length 위조 대비)
+
 	// ParseMultipartForm 대신 스트리밍 리더를 써서 파일 전체를 메모리/자동 임시파일에 올리지 않는다.
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -27,7 +34,7 @@ func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			fail(w, r, http.StatusBadRequest, "업로드 데이터를 읽는 중 오류가 발생했습니다")
+			s.respondErr(w, r, s.mapReadErr(err))
 			return
 		}
 		if part.FormName() != "file" || part.FileName() == "" {
@@ -48,6 +55,11 @@ func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 
 // handleUploadPut: PUT /upload/{name}  →  curl -T a.png http://host/upload/
 func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > s.cfg.MaxUpload {
+		fail(w, r, http.StatusRequestEntityTooLarge, s.tooLargeMsg())
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUpload+1)
 	m, key, err := s.ingest(r.Body, r.PathValue("name"))
 	if err != nil {
 		s.respondErr(w, r, err)
@@ -60,7 +72,7 @@ func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
 //
 //  1. 파일명 검증/정규화 + 확장자 허용 목록 (validate.go)
 //  2. 앞 512바이트로 실제 MIME 판별 → 확장자와 일치해야 통과
-//  3. 임시 파일로 스트리밍 저장 + SHA-256 계산
+//  3. 크기 제한을 지키며 임시 파일로 스트리밍 저장 + SHA-256 계산
 //  4. 서버가 만든 랜덤 ID 로 최종 경로 확정 (사용자 입력은 경로에 전혀 쓰이지 않음)
 func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 	name, ext, herr := validateFilename(rawName)
@@ -81,10 +93,11 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 		}
 	}()
 
+	lr := &io.LimitedReader{R: src, N: s.cfg.MaxUpload + 1} // 1바이트 더 읽어서 초과 여부 판정
 	head := make([]byte, 512)
-	n, err := io.ReadFull(src, head)
+	n, err := io.ReadFull(lr, head)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, "", err
+		return nil, "", s.mapReadErr(err)
 	}
 	head = head[:n]
 	if n == 0 {
@@ -101,11 +114,14 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 	if _, err := w.Write(head); err != nil {
 		return nil, "", err
 	}
-	rest, err := io.Copy(w, src)
+	rest, err := io.Copy(w, lr)
 	if err != nil {
-		return nil, "", err
+		return nil, "", s.mapReadErr(err)
 	}
 	size := int64(n) + rest
+	if size > s.cfg.MaxUpload {
+		return nil, "", newErr(http.StatusRequestEntityTooLarge, "%s", s.tooLargeMsg())
+	}
 	if err := tmp.Close(); err != nil {
 		return nil, "", err
 	}
@@ -132,6 +148,19 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 	}
 	committed = true
 	return m, key, nil
+}
+
+func (s *Server) tooLargeMsg() string {
+	return fmt.Sprintf("파일이 너무 큽니다 (최대 %dMB)", s.cfg.MaxUpload>>20)
+}
+
+func (s *Server) mapReadErr(err error) error {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return newErr(http.StatusRequestEntityTooLarge, "%s", s.tooLargeMsg())
+	}
+	log.Printf("업로드 읽기 오류: %v", err)
+	return newErr(http.StatusBadRequest, "업로드 데이터를 읽는 중 오류가 발생했습니다")
 }
 
 // respondErr: httpError 는 그대로 노출하고, 그 외 내부 오류는 로그에만 남기고 일반 메시지로 가린다.
