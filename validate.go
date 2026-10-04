@@ -10,7 +10,9 @@ import (
 	"unicode/utf8"
 )
 
-// allowedTypes: 허용 확장자 목록 (allowlist). 목록에 없으면 거부한다.
+// allowedTypes: 허용 확장자 → 파일 "내용"으로 판별한 MIME 이 이 목록 안에 있어야 통과.
+// http.DetectContentType 은 앞 512바이트의 매직 넘버를 보고 판별하므로
+// 클라이언트가 보낸 Content-Type 헤더나 확장자 위조를 신뢰하지 않는다.
 var allowedTypes = map[string][]string{
 	".txt":  {"text/plain"},
 	".md":   {"text/plain"},
@@ -98,4 +100,22 @@ func validateFilename(raw string) (name, ext string, herr *httpError) {
 			"허용되지 않는 확장자입니다: %s (허용: %s)", ext, strings.Join(allowedExtensions(), " "))
 	}
 	return name, ext, nil
+}
+
+// checkMIME 은 파일 앞부분(최대 512바이트)으로 실제 형식을 판별해 확장자와 일치하는지 확인한다.
+// 통과하면 판별된 전체 MIME 문자열(예: "text/plain; charset=utf-8")을 돌려준다.
+func checkMIME(ext string, head []byte) (string, error) {
+	allowed, ok := allowedTypes[ext]
+	if !ok {
+		return "", fmt.Errorf("허용되지 않는 확장자입니다: %s", ext)
+	}
+	sniffed := http.DetectContentType(head)
+	base, _, _ := strings.Cut(sniffed, ";")
+	base = strings.TrimSpace(base)
+	for _, a := range allowed {
+		if a == base {
+			return sniffed, nil
+		}
+	}
+	return "", fmt.Errorf("파일 내용(%s)이 확장자(%s)와 일치하지 않습니다", base, ext)
 }

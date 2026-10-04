@@ -22,6 +22,7 @@ type Meta struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"` // 원본 이름 (표시용, 경로에 쓰이지 않음)
 	Size      int64     `json:"size"`
+	MIME      string    `json:"mime"` // 내용 기반으로 판별한 MIME
 	CreatedAt time.Time `json:"created_at"`
 }
 
