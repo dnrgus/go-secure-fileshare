@@ -173,4 +173,4 @@ git pull && DOMAIN=files.example.com docker compose up -d --build        # A안
 |---|---|
 | ① 외부에서 접속 가능한 웹 서비스 링크 | ☐ 모바일 데이터(Wi-Fi 끈 상태)로도 접속되는지 · ☐ `BASE=… ./scripts/e2e.sh` 가 FAIL=0 · ☐ 제출 검증 기간 동안 서버 유지 |
 | ② GitHub 저장소 URL | ☐ `data/`·`.env` 가 커밋되지 않음(`.gitignore`) · ☐ README 와 `go.mod` 포함 · ☐ 저장소 공개 여부 확인 |
-| ③ 블로그 링크 (노션 X) | ☐ `BLOG_OUTLINE.md` 의 구성·증거 자료 포함 · ☐ 링크가 로그인 없이 열림 |
+| ③ 블로그 링크 (노션 X) | ☐ 주요 코드·테스트 결과·배포 검증 화면 포함 · ☐ 링크가 로그인 없이 열림 |
