@@ -134,16 +134,21 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	now := time.Now().UTC()
 	m := &Meta{
 		ID:         id,
 		Name:       name,
 		Size:       size,
 		MIME:       mimeType,
 		SHA256:     hex.EncodeToString(hasher.Sum(nil)),
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(s.cfg.TTL),
 		DeleteHash: hashKey(key),
 	}
 	if err := s.store.Commit(m, tmpPath); err != nil {
+		if errors.Is(err, ErrQuota) {
+			return nil, "", newErr(http.StatusInsufficientStorage, "서버 저장 공간이 부족합니다")
+		}
 		return nil, "", err
 	}
 	committed = true
@@ -184,5 +189,6 @@ func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "%s\n", link)
 	fmt.Fprintf(w, "get:     curl -OJ '%s'\n", link) // PathEscape 가 ' 를 %27 로 바꾸므로 작은따옴표로 안전하게 감쌀 수 있다
+	fmt.Fprintf(w, "expires: %s\n", m.ExpiresAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "delete:  curl -X DELETE -H 'X-Delete-Key: %s' %s/f/%s\n", key, base, m.ID)
 }
