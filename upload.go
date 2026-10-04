@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -32,13 +34,13 @@ func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 			_ = part.Close()
 			continue
 		}
-		m, err := s.ingest(part, part.FileName())
+		m, key, err := s.ingest(part, part.FileName())
 		_ = part.Close()
 		if err != nil {
 			s.respondErr(w, r, err)
 			return
 		}
-		s.respondUploaded(w, r, m)
+		s.respondUploaded(w, r, m, key)
 		return
 	}
 	fail(w, r, http.StatusBadRequest, `"file" 필드에 파일이 없습니다`)
@@ -46,29 +48,29 @@ func (s *Server) handleUploadForm(w http.ResponseWriter, r *http.Request) {
 
 // handleUploadPut: PUT /upload/{name}  →  curl -T a.png http://host/upload/
 func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
-	m, err := s.ingest(r.Body, r.PathValue("name"))
+	m, key, err := s.ingest(r.Body, r.PathValue("name"))
 	if err != nil {
 		s.respondErr(w, r, err)
 		return
 	}
-	s.respondUploaded(w, r, m)
+	s.respondUploaded(w, r, m, key)
 }
 
 // ingest 가 업로드 보안 파이프라인의 핵심이다.
 //
 //  1. 파일명 검증/정규화 + 확장자 허용 목록 (validate.go)
 //  2. 앞 512바이트로 실제 MIME 판별 → 확장자와 일치해야 통과
-//  3. 임시 파일로 스트리밍 저장
+//  3. 임시 파일로 스트리밍 저장 + SHA-256 계산
 //  4. 서버가 만든 랜덤 ID 로 최종 경로 확정 (사용자 입력은 경로에 전혀 쓰이지 않음)
-func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
+func (s *Server) ingest(src io.Reader, rawName string) (*Meta, string, error) {
 	name, ext, herr := validateFilename(rawName)
 	if herr != nil {
-		return nil, herr
+		return nil, "", herr
 	}
 
 	tmp, err := s.store.CreateTemp()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	tmpPath := tmp.Name()
 	committed := false
@@ -82,40 +84,54 @@ func (s *Server) ingest(src io.Reader, rawName string) (*Meta, error) {
 	head := make([]byte, 512)
 	n, err := io.ReadFull(src, head)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, err
+		return nil, "", err
 	}
 	head = head[:n]
 	if n == 0 {
-		return nil, newErr(http.StatusBadRequest, "빈 파일은 업로드할 수 없습니다")
+		return nil, "", newErr(http.StatusBadRequest, "빈 파일은 업로드할 수 없습니다")
 	}
 
 	mimeType, err := checkMIME(ext, head)
 	if err != nil {
-		return nil, newErr(http.StatusUnsupportedMediaType, "%s", err.Error())
+		return nil, "", newErr(http.StatusUnsupportedMediaType, "%s", err.Error())
 	}
 
-	if _, err := tmp.Write(head); err != nil {
-		return nil, err
+	hasher := sha256.New()
+	w := io.MultiWriter(tmp, hasher)
+	if _, err := w.Write(head); err != nil {
+		return nil, "", err
 	}
-	rest, err := io.Copy(tmp, src)
+	rest, err := io.Copy(w, src)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	size := int64(n) + rest
 	if err := tmp.Close(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	id, err := randomHex(16)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	m := &Meta{ID: id, Name: name, Size: size, MIME: mimeType, CreatedAt: time.Now().UTC()}
+	key, err := randomHex(16)
+	if err != nil {
+		return nil, "", err
+	}
+	m := &Meta{
+		ID:         id,
+		Name:       name,
+		Size:       size,
+		MIME:       mimeType,
+		SHA256:     hex.EncodeToString(hasher.Sum(nil)),
+		CreatedAt:  time.Now().UTC(),
+		DeleteHash: hashKey(key),
+	}
 	if err := s.store.Commit(m, tmpPath); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	committed = true
-	return m, nil
+	return m, key, nil
 }
 
 // respondErr: httpError 는 그대로 노출하고, 그 외 내부 오류는 로그에만 남기고 일반 메시지로 가린다.
@@ -129,11 +145,15 @@ func (s *Server) respondErr(w http.ResponseWriter, r *http.Request, err error) {
 	fail(w, r, http.StatusInternalServerError, "서버 내부 오류")
 }
 
-func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta) {
-	link := s.baseURL(r) + "/f/" + m.ID + "/" + url.PathEscape(m.Name)
+func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta, key string) {
+	base := s.baseURL(r)
+	link := base + "/f/" + m.ID + "/" + url.PathEscape(m.Name)
+	w.Header().Set("Cache-Control", "no-store")
+
 	// curl 용 평문 응답: 첫 줄이 곧 공유 링크이므로 `| head -n1` 로 스크립트에서 쓰기 쉽다.
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "%s\n", link)
 	fmt.Fprintf(w, "get:     curl -OJ '%s'\n", link) // PathEscape 가 ' 를 %27 로 바꾸므로 작은따옴표로 안전하게 감쌀 수 있다
+	fmt.Fprintf(w, "delete:  curl -X DELETE -H 'X-Delete-Key: %s' %s/f/%s\n", key, base, m.ID)
 }
