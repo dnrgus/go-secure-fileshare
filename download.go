@@ -25,7 +25,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", m.MIME) // 업로드 때 내용으로 판별해 둔 값 (허용 목록 안의 안전한 타입뿐)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+m.Name+`"`)
 
 	// ServeContent 가 Range / HEAD / If-Modified-Since 를 처리한다.
