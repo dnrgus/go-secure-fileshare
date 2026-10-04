@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -16,16 +18,25 @@ type Server struct {
 	cfg     Config
 	store   *Store
 	limiter *limiter
+	web     fs.FS
+	index   []byte
 }
 
-func NewServer(cfg Config, store *Store) *Server {
-	return &Server{cfg: cfg, store: store, limiter: newLimiter(cfg.RatePerMin)}
+func NewServer(cfg Config, store *Store, web fs.FS) *Server {
+	idx, err := fs.ReadFile(web, "index.html")
+	if err != nil {
+		log.Fatalf("index.html 로드 실패: %v", err)
+	}
+	return &Server{cfg: cfg, store: store, limiter: newLimiter(cfg.RatePerMin), web: web, index: idx}
 }
 
 // Routes 는 Go 1.22 의 메서드+경로 패턴 라우팅을 사용한다.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /static/{file}", s.handleStatic)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("GET /api/limits", s.handleLimits)
 
 	mux.HandleFunc("POST /upload", s.handleUploadForm)      // curl -F "file=@a.png" URL/upload
 	mux.HandleFunc("PUT /upload/{name}", s.handleUploadPut) // curl -T a.png URL/upload/
@@ -35,6 +46,31 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /f/{id}", s.handleDelete)
 
 	return s.recoverMW(s.logMW(s.headersMW(mux)))
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(s.index)
+}
+
+// handleStatic 은 허용 목록에 있는 두 파일만 서빙한다 (디렉터리 리스팅/임의 파일 노출 방지).
+func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("file")
+	if name != "app.js" && name != "style.css" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	http.ServeFileFS(w, r, s.web, name)
+}
+
+func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"max_upload_bytes": s.cfg.MaxUpload,
+		"ttl_hours":        int(s.cfg.TTL / time.Hour),
+		"allowed":          allowedExtensions(),
+	})
 }
 
 // ---- 미들웨어 ----
@@ -103,7 +139,24 @@ func redactPath(p string) string {
 
 // ---- 응답/요청 헬퍼 ----
 
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// wantsJSON: 웹 UI 는 Accept: application/json 으로 요청하고, curl 은 기본값(*/*)이라 평문을 받는다.
+func wantsJSON(r *http.Request) bool {
+	return r.URL.Query().Get("format") == "json" ||
+		strings.Contains(r.Header.Get("Accept"), "application/json")
+}
+
+// fail 은 오류를 클라이언트 종류(JSON/평문)에 맞게 내려준다.
 func fail(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if wantsJSON(r) {
+		writeJSON(w, status, map[string]string{"error": msg})
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
 	fmt.Fprintf(w, "error: %s\n", msg)
