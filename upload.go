@@ -135,4 +135,5 @@ func (s *Server) respondUploaded(w http.ResponseWriter, r *http.Request, m *Meta
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "%s\n", link)
+	fmt.Fprintf(w, "get:     curl -OJ '%s'\n", link) // PathEscape 가 ' 를 %27 로 바꾸므로 작은따옴표로 안전하게 감쌀 수 있다
 }

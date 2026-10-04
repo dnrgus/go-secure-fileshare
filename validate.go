@@ -146,3 +146,36 @@ func isBidiControl(r rune) bool {
 		(r >= '\u202a' && r <= '\u202e') ||
 		(r >= '\u2066' && r <= '\u2069')
 }
+
+// contentDisposition 은 다운로드 시 항상 attachment 로 내려 브라우저가 파일을 "실행/렌더링"하지 못하게 한다.
+//
+// 파일명은 두 가지로 모두 보낸다.
+//   - filename*=UTF-8”...  (RFC 5987/6266): 브라우저는 이쪽을 우선한다.
+//   - filename="..."        : curl -J 는 filename* 를 해석하지 못하고 이것만 쓴다.
+//     따옴표·역슬래시·세미콜론·퍼센트·제어문자만 '_' 로 바꾸고 UTF-8 은 그대로 둔다
+//     (RFC 7230 의 quoted-string 은 obs-text(0x80~0xFF)를 허용한다).
+//     헤더 인젝션을 막는 CR/LF 등 제어문자는 업로드 단계에서 이미 거부되지만 여기서도 한 번 더 치환한다.
+func contentDisposition(name string) string {
+	fallback := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || isBidiControl(r) || r == '"' || r == '\\' || r == ';' || r == '%' {
+			return '_'
+		}
+		return r
+	}, name)
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fallback, rfc5987Escape(name))
+}
+
+func rfc5987Escape(s string) string {
+	const attrChars = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			strings.IndexByte(attrChars, c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
