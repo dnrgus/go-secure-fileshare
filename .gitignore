@@ -1,0 +1,17 @@
+# 빌드 산출물
+/fileshare
+*.exe
+
+# 업로드된 파일/메타데이터 (절대 커밋 금지)
+/data/
+
+# 환경/비밀
+.env
+*.pem
+*.key
+
+# 로그/에디터
+*.log
+.idea/
+.vscode/
+.DS_Store
