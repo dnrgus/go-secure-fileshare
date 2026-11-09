@@ -95,7 +95,7 @@ func (s *Server) handleUploadPut(w http.ResponseWriter, r *http.Request) {
 	s.respondUploaded(w, r, m, key)
 }
 
-// ingest 가 업로드 보안 파이프라인의 핵심이다.
+// ingest는 업로드 검증 순서를 담당합니다.
 //
 //  1. 파일명 검증/정규화 + 확장자 허용 목록 (validate.go)
 //  2. 앞 512바이트로 실제 MIME 판별 → 확장자와 일치해야 통과

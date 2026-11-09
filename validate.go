@@ -65,9 +65,9 @@ func allowedExtensions() []string {
 
 // validateFilename 은 업로드된 원본 파일명을 검증/정규화하고 (정제된 이름, 소문자 확장자)를 돌려준다.
 //
-// 중요: 이 이름은 "표시용"일 뿐이다. 디스크 경로는 항상 서버가 만든 랜덤 ID 로만 만들기 때문에
+// 이 이름은 표시용입니다. 디스크 경로는 서버가 만든 랜덤 ID로만 만들기 때문에
 // 파일명 기반 경로 조작(../, 절대경로, NUL 바이트)은 저장 단계에서 애초에 불가능하다.
-// 여기서의 검증은 그 위에 얹는 2중 방어(defense in depth)다.
+// 여기의 검증은 그 위에 한 겹 더 얹은 방어입니다.
 func validateFilename(raw string) (name, ext string, herr *httpError) {
 	if raw == "" {
 		return "", "", newErr(http.StatusBadRequest, "파일 이름이 비어 있습니다")
